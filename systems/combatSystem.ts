@@ -1,9 +1,6 @@
-
-
-
 import React from 'react';
 import { CLASS_STATS, INTERNAL_WIDTH, INTERNAL_HEIGHT } from '../constants';
-import { Entity, CharacterClass, GameState, Vector2, ElementalType } from '../types';
+import { Entity, CharacterClass, GameState, Vector2, ElementalType, PropType } from '../types';
 import { AudioSystem } from '../services/audioSystem';
 import NewAudioManager from '../services/AudioManager'; // Import the new singleton
 
@@ -12,6 +9,7 @@ export interface CombatContext {
     enemies: Entity[];
     projectiles: Entity[];
     particles: Entity[];
+    props: Entity[]; // Added props
     stats: GameState;
     mouse: Vector2;
     mouseRef?: React.MutableRefObject<Vector2>; 
@@ -494,7 +492,7 @@ export const triggerSkill = (ctx: CombatContext, slotIndex: number, characterCla
 };
 
 export const fireWeapon = (ctx: CombatContext, now: number, characterClass: CharacterClass) => {
-    const { player, enemies, projectiles, particles, stats, mouse, camera, audioManager, addFloatingText, triggerShake, lastShotTime, setLastShotTime } = ctx;
+    const { player, enemies, projectiles, particles, props, stats, mouse, camera, audioManager, addFloatingText, triggerShake, lastShotTime, setLastShotTime } = ctx;
     if (player.chargeTimer && player.chargeTimer > 0) return; 
     if (player.dashTimer && player.dashTimer > 0) return;
     if (player.reloading) return; 
@@ -699,6 +697,34 @@ export const fireWeapon = (ctx: CombatContext, now: number, characterClass: Char
         let didHeal = false;
         if (player.vampiricCharges && player.vampiricCharges > 0) { player.vampiricCharges--; const heal = player.maxHp * 0.20; player.hp = Math.min(player.maxHp, player.hp + heal); stats.playerHp = player.hp; addFloatingText(`+${heal.toFixed(0)}`, player.pos.x, player.pos.y - 40, '#22c55e'); spawnParticle(particles, player.pos, '#22c55e', 10, 5); didHeal = true; }
         
+        // --- PROP INTERACTION (Melee) ---
+        for (let i = props.length - 1; i >= 0; i--) {
+            const p = props[i];
+            if (!p.propActive) continue;
+            
+            const dx = p.pos.x - player.pos.x;
+            const dy = p.pos.y - player.pos.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const angleToProp = Math.atan2(dy, dx);
+            let angleDiff = angleToProp - angle; 
+            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2; while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+            if (dist < effectiveRange + p.radius && Math.abs(angleDiff) < coneHalfAngle) {
+                if (p.propType === PropType.BARREL) {
+                    p.propActive = false;
+                    projectiles.push({
+                        id: Math.random().toString(), type: 'projectile', projectileType: 'EXPLOSIVE',
+                        pos: { ...p.pos }, velocity: {x:0,y:0}, radius: 100, color: '#f97316', 
+                        hp: 1, maxHp: 1, damage: stats.currentDamage * 5.0, duration: 40
+                    });
+                    spawnParticle(particles, p.pos, '#f97316', 20, 8);
+                    audioManager.playExplosion();
+                    triggerShake(20, 10);
+                    props.splice(i, 1);
+                }
+            }
+        }
+
         let hitAny = false; 
 
         enemies.forEach(e => {

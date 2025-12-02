@@ -1,10 +1,8 @@
 
-
-
 import React from 'react';
-import { GameState, CharacterClass } from '../types';
+import { GameState, CharacterClass, GameEventType } from '../types';
 import { CLASS_STATS } from '../constants';
-import { Shield, Skull, Heart, Lock, Zap, Crosshair, Bomb, Snowflake, Flame, Wind, Sword, Moon, Trophy, Flag } from 'lucide-react';
+import { Shield, Skull, Heart, Lock, Zap, Crosshair, Bomb, Snowflake, Flame, Wind, Sword, Moon, Trophy, Flag, AlertTriangle } from 'lucide-react';
 
 interface UIOverlayProps {
   stats: GameState;
@@ -57,9 +55,45 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ stats, characterClass, playerAmmo
   return (
     <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between">
       
+      {/* --- EVENT BANNER --- */}
+      {stats.activeEvent && (
+          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center animate-in slide-in-from-top-4 fade-in duration-500">
+              <div 
+                className="px-6 py-2 rounded-b-xl border-t-0 border-x-2 border-b-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] backdrop-blur-md flex items-center gap-3"
+                style={{ 
+                    backgroundColor: 'rgba(15, 23, 42, 0.9)', 
+                    borderColor: stats.activeEvent.color,
+                    boxShadow: `0 0 15px ${stats.activeEvent.color}40`
+                }}
+              >
+                  <AlertTriangle className="animate-pulse" color={stats.activeEvent.color} size={24} />
+                  <div className="flex flex-col items-center">
+                      <h3 className="text-lg font-black uppercase tracking-widest text-white leading-none mb-1">
+                          {stats.activeEvent.name}
+                      </h3>
+                      <p className="text-xs font-mono text-white/80 uppercase">
+                          {stats.activeEvent.description}
+                      </p>
+                  </div>
+                  <AlertTriangle className="animate-pulse" color={stats.activeEvent.color} size={24} />
+              </div>
+              
+              {/* Duration Bar */}
+              <div className="w-full h-1 mt-1 bg-black/50 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full transition-all duration-100 ease-linear"
+                    style={{ 
+                        width: `${(stats.activeEvent.timeLeft / stats.activeEvent.totalDuration) * 100}%`,
+                        backgroundColor: stats.activeEvent.color
+                    }}
+                  />
+              </div>
+          </div>
+      )}
+
       {/* BOSS HP BAR */}
       {stats.bossHp > 0 && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 w-1/2 z-50 animate-in fade-in duration-500">
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 w-1/2 z-40 animate-in fade-in duration-500">
               <div className="flex justify-between text-white font-black text-lg mb-1 drop-shadow-md">
                   <span className="tracking-widest">{stats.bossName || 'BOSS'}</span>
                   <span className="text-red-400 font-mono">{stats.bossElement}</span>

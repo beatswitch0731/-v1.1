@@ -1,9 +1,8 @@
 
 import React, { useRef, useEffect, useState } from 'react';
-import { TILE_SIZE, CLASS_STATS, MAP_WIDTH, MAP_HEIGHT, INTERNAL_WIDTH, INTERNAL_HEIGHT, MAP_PALETTES, SPRITE_PALETTES, ALL_UPGRADES, IAIDO_CHARGE_FRAMES, GUNNER_EVOLUTIONS, SAMURAI_EVOLUTIONS } from '../constants';
-import { Vector2, TileType, Entity, CharacterClass, GameState, WeatherType, FloatingText, ItemType, MapType, Upgrade, Decoration, DecorationType, ShrineType, BossType } from '../types';
-import { ChevronsUp, Settings, Volume2, VolumeX, Music, Zap, X, Disc, SkipForward, SkipBack } from 'lucide-react';
-import { audioManager } from '../services/audioSystem';
+import { TILE_SIZE, CLASS_STATS, MAP_WIDTH, MAP_HEIGHT, INTERNAL_WIDTH, INTERNAL_HEIGHT, MAP_PALETTES, ALL_UPGRADES, IAIDO_CHARGE_FRAMES, GUNNER_EVOLUTIONS, SAMURAI_EVOLUTIONS } from '../constants';
+import { Vector2, TileType, Entity, CharacterClass, GameState, WeatherType, FloatingText, Upgrade, Decoration, DecorationType, ShrineType, BossType, PropType } from '../types';
+import { ChevronsUp, Settings, Volume2, VolumeX, Music, Zap, X, Disc, SkipForward, SkipBack, Anchor } from 'lucide-react';
 import NewAudioManager from '../services/AudioManager'; 
 import UpgradeModal from './UpgradeModal';
 import { generateMapData } from '../systems/mapSystem';
@@ -19,6 +18,7 @@ import * as PhysicsSystem from '../systems/physicsSystem';
 import * as EnemySystem from '../systems/enemySystem';
 import * as LootSystem from '../systems/lootSystem';
 import * as BossSystem from '../systems/boss/bossSystem';
+import * as EventSystem from '../systems/eventSystem'; // Import Event System
 import { getBossForMap } from '../data/bosses/bossData';
 
 interface GameCanvasProps {
@@ -54,9 +54,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const [interactionPrompt, setInteractionPrompt] = useState<string | null>(null);
   const [playerAmmo, setPlayerAmmo] = useState<number>(14);
   const [isReloading, setIsReloading] = useState<boolean>(false);
+  
+  // Transition State
+  const [transition, setTransition] = useState<{ active: boolean, opacity: number, text: string }>({ active: false, opacity: 0, text: '' });
+  const isTransitioningRef = useRef<boolean>(false);
 
   const statsRef = useRef<GameState>({
-    isPlaying: true, isPaused: false, isGameOver: false, score: 0, wave: 1, enemiesKilled: 0, timeElapsed: 0, level: 1, xp: 0, xpToNextLevel: 100, weather: weather, playerHp: CLASS_STATS[characterClass].maxHp, playerMaxHp: CLASS_STATS[characterClass].maxHp, activeCooldowns: {0:0, 1:0, 2:0, 3:0}, currentDamage: CLASS_STATS[characterClass].damage, currentMapType: MapType.GRASSLAND, bossHp: 0, bossMaxHp: 0, dashCooldownPct: 100
+    isPlaying: true, isPaused: false, isGameOver: false, score: 0, wave: 1, enemiesKilled: 0, timeElapsed: 0, level: 1, xp: 0, xpToNextLevel: 100, weather: weather, playerHp: CLASS_STATS[characterClass].maxHp, playerMaxHp: CLASS_STATS[characterClass].maxHp, activeCooldowns: {0:0, 1:0, 2:0, 3:0}, currentDamage: CLASS_STATS[characterClass].damage, currentMapType: MapType.GRASSLAND, bossHp: 0, bossMaxHp: 0, dashCooldownPct: 100, activeEvent: null
   });
 
   const playerRef = useRef<Entity>({
@@ -77,6 +81,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const itemsRef = useRef<Entity[]>([]);
   const decorationsRef = useRef<Entity[]>([]);
   const shrinesRef = useRef<Entity[]>([]);
+  const propsRef = useRef<Entity[]>([]); // NEW: Interactive props
   const textsRef = useRef<FloatingText[]>([]);
   
   // World Details
@@ -158,12 +163,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
   const generateMap = (mapType: MapType) => {
     const data = generateMapData(mapType, weather);
-    mapRef.current = data.map; mapSeedsRef.current = data.seeds; decorationsRef.current = data.trees; puddlesRef.current = data.puddles; groundDecorationsRef.current = data.groundDetails; shrinesRef.current = data.shrines; boatRef.current = data.boat; ripplesRef.current = []; initWeatherParticles();
+    mapRef.current = data.map; mapSeedsRef.current = data.seeds; decorationsRef.current = data.trees; puddlesRef.current = data.puddles; groundDecorationsRef.current = data.groundDetails; shrinesRef.current = data.shrines; boatRef.current = data.boat; ripplesRef.current = []; 
+    propsRef.current = data.props || []; // Load props
+    initWeatherParticles();
   };
 
   // --- ACTIONS (PASSED TO INPUT HOOK) ---
   const handleTriggerSkill = (slot: number) => {
-    const ctx: CombatSystem.CombatContext = { player: playerRef.current, enemies: enemiesRef.current, projectiles: projectilesRef.current, particles: particlesRef.current, stats: statsRef.current, mouse: mouseRef.current, mouseRef, camera: cameraRef.current, audioManager, addFloatingText, triggerShake, lastShotTime: lastShotTimeRef.current, setLastShotTime: (t) => lastShotTimeRef.current = t };
+    const ctx: CombatSystem.CombatContext = { player: playerRef.current, enemies: enemiesRef.current, projectiles: projectilesRef.current, particles: particlesRef.current, props: propsRef.current, stats: statsRef.current, mouse: mouseRef.current, mouseRef, camera: cameraRef.current, audioManager: NewAudioManager, addFloatingText, triggerShake, lastShotTime: lastShotTimeRef.current, setLastShotTime: (t) => lastShotTimeRef.current = t };
     CombatSystem.triggerSkill(ctx, slot, characterClass);
   };
 
@@ -185,7 +192,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       player.dashTimer = player.maxDashTimer; 
       player.dashCooldownTimer = 45; 
       player.dashDir = { x: dirX * dashSpeed, y: dirY * dashSpeed }; 
-      audioManager.playDash(); 
+      NewAudioManager.playDash(); 
       spawnParticle(player.pos, '#fff', 5, 2);
       
       if (characterClass === CharacterClass.SAMURAI && player.modifiers?.thunderDash) {
@@ -205,17 +212,34 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
   const handleInteract = () => {
     const player = playerRef.current;
+    
+    // Portal & Boat
     if (portalRef.current && Math.hypot(player.pos.x - portalRef.current.pos.x, player.pos.y - portalRef.current.pos.y) < 80) { 
-        triggerShake(20, 30); audioManager.playPortal(); statsRef.current.currentMapType = MapType.ICE_WORLD; generateMap(MapType.ICE_WORLD); player.pos = { x: TILE_SIZE * 4, y: TILE_SIZE * 4 }; portalRef.current = null; enemiesRef.current = []; projectilesRef.current = []; addFloatingText("欢迎来到极寒废土", player.pos.x, player.pos.y - 50, '#bae6fd', 2); 
+        triggerShake(20, 30); NewAudioManager.playPortal(); statsRef.current.currentMapType = MapType.ICE_WORLD; generateMap(MapType.ICE_WORLD); player.pos = { x: TILE_SIZE * 4, y: TILE_SIZE * 4 }; portalRef.current = null; enemiesRef.current = []; projectilesRef.current = []; addFloatingText("欢迎来到极寒废土", player.pos.x, player.pos.y - 50, '#bae6fd', 2); 
         return; 
     }
     if (boatRef.current && Math.hypot(player.pos.x - boatRef.current.pos.x, player.pos.y - boatRef.current.pos.y) < 60) { player.onBoat = !player.onBoat; addFloatingText(player.onBoat ? "已登船" : "已下船", player.pos.x, player.pos.y - 30, '#fff'); if(player.onBoat) player.pos = {...boatRef.current.pos}; else player.pos.y += 40; return; }
     
-    // Check Ground Details for BOSS ALTAR first (Search nearby 3x3 tiles for better hit detection)
+    // Props Interaction (Chests)
+    const interactablePropIndex = propsRef.current.findIndex(p => p.propType === PropType.CHEST && p.propActive && Math.hypot(player.pos.x - p.pos.x, player.pos.y - p.pos.y) < 50);
+    if (interactablePropIndex !== -1) {
+        const chest = propsRef.current[interactablePropIndex];
+        chest.propActive = false; // Disable interaction
+        NewAudioManager.playUpgradeSelect();
+        
+        // Spawn Loot
+        for(let i=0; i<5; i++) {
+            LootSystem.spawnItem(itemsRef.current, {x: chest.pos.x + (Math.random()-0.5)*30, y: chest.pos.y + (Math.random()-0.5)*30});
+        }
+        addFloatingText("宝藏!", chest.pos.x, chest.pos.y - 40, '#facc15', 1.5);
+        spawnParticle(chest.pos, '#facc15', 20, 5);
+        propsRef.current.splice(interactablePropIndex, 1);
+        return;
+    }
+
+    // Boss Altar
     const tileX = Math.floor(player.pos.x / TILE_SIZE);
     const tileY = Math.floor(player.pos.y / TILE_SIZE);
-    
-    // Scan 3x3 area for altar
     for(let oy = -1; oy <= 1; oy++) {
         for(let ox = -1; ox <= 1; ox++) {
             const tx = tileX + ox;
@@ -225,18 +249,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                 if (decor && decor.type === DecorationType.BOSS_ALTAR && decor.active !== false) {
                      const bossType = getBossForMap(statsRef.current.currentMapType);
                      decor.active = false; // Disable Altar
-                     BossSystem.spawnBoss(bossType, {x: tx * TILE_SIZE + TILE_SIZE/2, y: ty * TILE_SIZE + TILE_SIZE/2}, enemiesRef.current, statsRef.current, triggerShake, addFloatingText, audioManager);
+                     BossSystem.spawnBoss(bossType, {x: tx * TILE_SIZE + TILE_SIZE/2, y: ty * TILE_SIZE + TILE_SIZE/2}, enemiesRef.current, statsRef.current, triggerShake, addFloatingText, NewAudioManager);
                      return;
                 }
             }
         }
     }
 
+    // Shrines
     const nearbyShrine = shrinesRef.current.find(s => !s.shrineUsed && Math.hypot(player.pos.x - s.pos.x, player.pos.y - s.pos.y) < 60);
     if (nearbyShrine) {
-        nearbyShrine.shrineUsed = true; audioManager.playUpgradeSelect(); triggerShake(10, 10); spawnParticle(nearbyShrine.pos, nearbyShrine.color, 30, 8);
+        nearbyShrine.shrineUsed = true; NewAudioManager.playUpgradeSelect(); triggerShake(10, 10); spawnParticle(nearbyShrine.pos, nearbyShrine.color, 30, 8);
         if (nearbyShrine.shrineType === ShrineType.LEGENDARY) {
-            // BOSS REWARD
             if (!player.modifiers) player.modifiers = { damageMult: 1 } as any;
             player.modifiers!.damageMult += 0.3;
             player.modifiers!.maxHpMult += 0.3;
@@ -253,11 +277,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   // --- USE HOOKS ---
   const { keysRef, mouseRef } = useGameInput(
     canvasRef, isPaused, levelUpOptions, evolutionOptions, onTogglePause, characterClass, playerRef,
-    addFloatingText, audioManager, handleTriggerSkill, handleTriggerDash, handleInteract, cameraRef
+    addFloatingText, NewAudioManager, handleTriggerSkill, handleTriggerDash, handleInteract, cameraRef
   );
 
   const triggerLevelUp = () => {
-      audioManager.playLevelUp(); statsRef.current.isPaused = true; 
+      NewAudioManager.playLevelUp(); statsRef.current.isPaused = true; 
       const availableUpgrades = ALL_UPGRADES.filter(u => {
           if (u.maxStacks) { const currentCount = playerRef.current.upgradeCounts?.[u.id] || 0; if (currentCount >= u.maxStacks) return false; }
           if (u.classSpecific && u.classSpecific !== characterClass) return false;
@@ -316,6 +340,51 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       statsRef.current.isPaused = false;
   };
 
+  // --- TRANSITION LOGIC ---
+  const performMapTransition = (newMapType: MapType, playerPos: Vector2) => {
+      const destName = newMapType === MapType.ICE_WORLD ? "极寒海域 (Frozen Seas)" : "无尽草原 (Endless Plains)";
+      isTransitioningRef.current = true;
+      setTransition({ active: true, opacity: 0, text: `正在前往: ${destName}` });
+      
+      // 1. Fade Out
+      setTimeout(() => setTransition(prev => ({ ...prev, opacity: 1 })), 50);
+      NewAudioManager.playChargeReady(); // Wind/Travel Sound
+
+      // 2. Switch (Hidden)
+      setTimeout(() => {
+          statsRef.current.currentMapType = newMapType;
+          generateMap(newMapType);
+          
+          enemiesRef.current = [];
+          projectilesRef.current = [];
+          itemsRef.current = [];
+          propsRef.current = [];
+          
+          // Teleport Player to opposite side
+          if (playerPos.x < 0) playerRef.current.pos.x = MAP_WIDTH * TILE_SIZE - TILE_SIZE * 2;
+          else if (playerPos.x > MAP_WIDTH * TILE_SIZE) playerRef.current.pos.x = TILE_SIZE * 2;
+          if (playerPos.y < 0) playerRef.current.pos.y = MAP_HEIGHT * TILE_SIZE - TILE_SIZE * 2;
+          else if (playerPos.y > MAP_HEIGHT * TILE_SIZE) playerRef.current.pos.y = TILE_SIZE * 2;
+          
+          boatRef.current = {
+                id: 'boat', type: 'boat',
+                pos: { ...playerRef.current.pos },
+                velocity: {x:0, y:0}, radius: 30, color: '#8b4513', hp: 999, maxHp: 999,
+                rotation: playerRef.current.rotation
+          };
+
+          // 3. Fade In
+          setTimeout(() => {
+              setTransition(prev => ({ ...prev, opacity: 0 }));
+              setTimeout(() => {
+                  setTransition(prev => ({ ...prev, active: false }));
+                  isTransitioningRef.current = false;
+              }, 1000);
+          }, 500);
+
+      }, 1500); // Wait for full fade out
+  };
+
   // Initial Map
   useEffect(() => { generateMap(MapType.GRASSLAND); lastTimeRef.current = Date.now(); }, [characterClass, isPaused, levelUpOptions, evolutionOptions]);
 
@@ -323,8 +392,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     const canvas = canvasRef.current; if (!canvas) return; const ctx = canvas.getContext('2d', { alpha: false }); if (!ctx) return; canvas.width = INTERNAL_WIDTH; canvas.height = INTERNAL_HEIGHT; let animationFrameId: number; lastTimeRef.current = Date.now();
 
     const gameLoop = () => {
-        const now = Date.now(); const rawDelta = now - lastTimeRef.current; lastTimeRef.current = now; const timeScale = Math.min(rawDelta / 16.667, 4.0);
-        if (statsRef.current.isGameOver) return; if (isPaused || statsRef.current.isPaused) { return; }
+        const now = Date.now(); 
+        
+        // Ensure loop keeps running to handle transitions
+        animationFrameId = requestAnimationFrame(gameLoop);
+
+        // Pause Check
+        if (statsRef.current.isGameOver) return; 
+        if (isPaused || statsRef.current.isPaused) return;
+        
+        // Transition Check (Pause Logic Updates)
+        if (isTransitioningRef.current) return;
+
+        const rawDelta = now - lastTimeRef.current; lastTimeRef.current = now; const timeScale = Math.min(rawDelta / 16.667, 4.0);
         
         passiveXpTimerRef.current += rawDelta; if (passiveXpTimerRef.current >= 1000) { statsRef.current.xp += 1; passiveXpTimerRef.current = 0; const player = playerRef.current; const stats = CLASS_STATS[characterClass]; const mods = player.modifiers || { damageMult: 1 }; const dmgMult = (1 + (statsRef.current.level * 0.1)) * mods.damageMult; statsRef.current.currentDamage = stats.damage * dmgMult; }
         timeRef.current += timeScale; const currentPalette = MAP_PALETTES[statsRef.current.currentMapType][statsRef.current.weather];
@@ -332,10 +412,23 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         
         spatialHashRef.current.clear(); for (const enemy of enemiesRef.current) { spatialHashRef.current.insert(enemy); }
 
-        const combatCtx: CombatSystem.CombatContext = { player: playerRef.current, enemies: enemiesRef.current, projectiles: projectilesRef.current, particles: particlesRef.current, stats: statsRef.current, mouse: mouseRef.current, mouseRef: mouseRef, camera: cameraRef.current, audioManager, addFloatingText, triggerShake, lastShotTime: lastShotTimeRef.current, setLastShotTime: (t) => lastShotTimeRef.current = t };
+        const combatCtx: CombatSystem.CombatContext = { player: playerRef.current, enemies: enemiesRef.current, projectiles: projectilesRef.current, particles: particlesRef.current, props: propsRef.current, stats: statsRef.current, mouse: mouseRef.current, mouseRef: mouseRef, camera: cameraRef.current, audioManager: NewAudioManager, addFloatingText, triggerShake, lastShotTime: lastShotTimeRef.current, setLastShotTime: (t) => lastShotTimeRef.current = t };
         CombatSystem.updateFunnels(combatCtx, now, characterClass);
         CombatSystem.updateElementalSwords(combatCtx, now); 
         
+        // --- RANDOM EVENTS UPDATE ---
+        EventSystem.updateEvents(statsRef.current, playerRef.current, enemiesRef.current, itemsRef.current, propsRef.current, timeScale, NewAudioManager, addFloatingText, triggerShake);
+
+        // --- BOAT MAP TRANSITION CHECK ---
+        const player = playerRef.current;
+        if (player.onBoat && !isTransitioningRef.current) {
+            const margin = TILE_SIZE; 
+            if (player.pos.x < -margin || player.pos.x > MAP_WIDTH * TILE_SIZE + margin || player.pos.y < -margin || player.pos.y > MAP_HEIGHT * TILE_SIZE + margin) {
+                const newMap = statsRef.current.currentMapType === MapType.GRASSLAND ? MapType.ICE_WORLD : MapType.GRASSLAND;
+                performMapTransition(newMap, player.pos);
+            }
+        }
+
         // --- SAMURAI SKILL 2 HOLD ---
         if (characterClass === CharacterClass.SAMURAI) {
             const isHoldingSkill2 = keysRef.current.has('Digit2');
@@ -367,7 +460,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
             }
         }
 
-        let prompt = null; const player = playerRef.current;
+        let prompt = null;
         if (player.quickReloadBuffTimer && player.quickReloadBuffTimer > 0) { player.quickReloadBuffTimer -= rawDelta; }
         if (player.reloading && player.reloadTimer && player.reloadTimer > 0) { player.reloadTimer -= rawDelta; if (player.reloadTimer <= 0) { player.reloading = false; player.ammo = player.maxAmmo; addFloatingText("装弹完成!", player.pos.x, player.pos.y - 50, '#ffffff', 1.0); } }
         
@@ -395,21 +488,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
             if (altarFound) {
                 prompt = "BOSS_TRIGGER"; // Special flag for render
             } else {
-                const s = shrinesRef.current.find(s => !s.shrineUsed && Math.hypot(player.pos.x - s.pos.x, player.pos.y - s.pos.y) < 60); 
-                if (s) { 
-                    if (s.shrineType === ShrineType.BLOOD) prompt = "E: 鲜血祭祀 (HP <-> DMG)"; 
-                    else if (s.shrineType === ShrineType.HEAL) prompt = "E: 治愈祷言"; 
-                    else if (s.shrineType === ShrineType.LEGENDARY) prompt = "E: 拾取传说之力";
-                    else prompt = "E: 触摸神龛"; 
+                // Props Check
+                const nearbyProp = propsRef.current.find(p => p.propType === PropType.CHEST && p.propActive && Math.hypot(player.pos.x - p.pos.x, player.pos.y - p.pos.y) < 50);
+                if (nearbyProp) {
+                    prompt = "E: 打开补给箱";
+                } else {
+                    const s = shrinesRef.current.find(s => !s.shrineUsed && Math.hypot(player.pos.x - s.pos.x, player.pos.y - s.pos.y) < 60); 
+                    if (s) { 
+                        if (s.shrineType === ShrineType.BLOOD) prompt = "E: 鲜血祭祀 (HP <-> DMG)"; 
+                        else if (s.shrineType === ShrineType.HEAL) prompt = "E: 治愈祷言"; 
+                        else if (s.shrineType === ShrineType.LEGENDARY) prompt = "E: 拾取传说之力";
+                        else prompt = "E: 触摸神龛"; 
+                    }
                 }
             }
         } 
         setInteractionPrompt(prompt);
 
         // --- BOSS LOGIC ---
-        // Removed hardcoded level-based spawn checks
-        
-        if (statsRef.current.level >= 12 && statsRef.current.currentMapType === MapType.GRASSLAND && !portalRef.current) { portalRef.current = { id: 'portal', type: 'portal', pos: { x: (MAP_WIDTH - 5) * TILE_SIZE, y: 5 * TILE_SIZE }, velocity: { x:0, y:0 }, radius: 40, color: '#a855f7', hp: 9999, maxHp: 9999 }; addFloatingText("传送门已开启", portalRef.current.pos.x, portalRef.current.pos.y - 60, '#a855f7', 2); }
         const boss = enemiesRef.current.find(e => e.enemyType?.startsWith('BOSS') || (e.bossType && e.bossType !== BossType.NONE)); if (boss) { statsRef.current.bossHp = boss.hp; statsRef.current.bossMaxHp = boss.maxHp; } else { statsRef.current.bossHp = 0; }
         
         if (player.dashCooldownTimer && player.dashCooldownTimer > 0) { player.dashCooldownTimer -= timeScale; }
@@ -417,14 +513,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         const pTileX = Math.floor(player.pos.x/TILE_SIZE); const pTileY = Math.floor(player.pos.y/TILE_SIZE); const inWater = mapRef.current[pTileY]?.[pTileX] === TileType.WATER; const inPuddle = !inWater && puddlesRef.current.some(p => player.pos.x > p.x && player.pos.x < p.x+p.w && player.pos.y > p.y && player.pos.y < p.y+p.h); if ((inWater || inPuddle) && (Math.abs(player.velocity.x) > 0.1 || Math.abs(player.velocity.y) > 0.1) && Math.floor(timeRef.current) % 5 === 0) { ripplesRef.current.push({x: player.pos.x, y: player.pos.y + 10, r: 0, maxR: 10, life: 30}); } 
         for (let i = ripplesRef.current.length - 1; i >= 0; i--) { const r = ripplesRef.current[i]; r.r += 0.2 * timeScale; r.life -= timeScale; if (r.life <= 0) ripplesRef.current.splice(i, 1); }
 
-        if (characterClass === CharacterClass.SAMURAI && player.modifiers?.iaidoMultiplier) { if (!player.isIaidoCharged) { player.stationaryTimer = (player.stationaryTimer || 0) + timeScale; if (Math.floor(player.stationaryTimer) % 5 === 0) { const angle = Math.random() * Math.PI * 2; const r = 40; particlesRef.current.push({ id: Math.random().toString(), type: 'particle', pos: {x: player.pos.x + Math.cos(angle)*r, y: player.pos.y + Math.sin(angle)*r}, velocity: {x: -Math.cos(angle)*2, y: -Math.sin(angle)*2}, radius: 2, color: '#bae6fd', hp:0, maxHp:0, duration: 20 }); } if (player.stationaryTimer >= IAIDO_CHARGE_FRAMES) { player.isIaidoCharged = true; triggerShake(10, 5); spawnParticle(player.pos, '#bae6fd', 30, 8); addFloatingText("⚡ 居合准备 ⚡", player.pos.x, player.pos.y - 70, '#bae6fd', 1.5); audioManager.playChargeReady(); } } else { const currentLeaves = particlesRef.current.filter(p => p.particleType === 'LEAF' && p.leafType === 'ORBIT').length; if (currentLeaves < 12 && Math.floor(timeRef.current) % 5 === 0) { particlesRef.current.push({ id: Math.random().toString(), type: 'particle', particleType: 'LEAF', leafType: 'ORBIT', pos: {x: 0, y: 0}, velocity: {x:0, y:0}, radius: 4, color: '#22c55e', hp:0, maxHp:0, duration: 9999, orbitAngle: Math.random() * Math.PI * 2, orbitRadius: 40 + Math.random() * 20, orbitSpeed: 0.05 + Math.random() * 0.05 }); } } }
+        if (characterClass === CharacterClass.SAMURAI && player.modifiers?.iaidoMultiplier) { if (!player.isIaidoCharged) { player.stationaryTimer = (player.stationaryTimer || 0) + timeScale; if (Math.floor(player.stationaryTimer) % 5 === 0) { const angle = Math.random() * Math.PI * 2; const r = 40; particlesRef.current.push({ id: Math.random().toString(), type: 'particle', pos: {x: player.pos.x + Math.cos(angle)*r, y: player.pos.y + Math.sin(angle)*r}, velocity: {x: -Math.cos(angle)*2, y: -Math.sin(angle)*2}, radius: 2, color: '#bae6fd', hp:0, maxHp:0, duration: 20 }); } if (player.stationaryTimer >= IAIDO_CHARGE_FRAMES) { player.isIaidoCharged = true; triggerShake(10, 5); spawnParticle(player.pos, '#bae6fd', 30, 8); addFloatingText("⚡ 居合准备 ⚡", player.pos.x, player.pos.y - 70, '#bae6fd', 1.5); NewAudioManager.playChargeReady(); } } else { const currentLeaves = particlesRef.current.filter(p => p.particleType === 'LEAF' && p.leafType === 'ORBIT').length; if (currentLeaves < 12 && Math.floor(timeRef.current) % 5 === 0) { particlesRef.current.push({ id: Math.random().toString(), type: 'particle', particleType: 'LEAF', leafType: 'ORBIT', pos: {x: 0, y: 0}, velocity: {x:0, y:0}, radius: 4, color: '#22c55e', hp:0, maxHp:0, duration: 9999, orbitAngle: Math.random() * Math.PI * 2, orbitRadius: 40 + Math.random() * 20, orbitSpeed: 0.05 + Math.random() * 0.05 }); } } }
         if (player.chargeTimer && player.chargeTimer > 0) { player.chargeTimer -= timeScale; if (player.chargeTimer <= 0) { const damageMult = 1 + (statsRef.current.level * 0.1); const angle = Math.atan2(mouseRef.current.y + cameraRef.current.y - player.pos.y, mouseRef.current.x + cameraRef.current.x - player.pos.x); projectilesRef.current.push({ id: Math.random().toString(), type: 'projectile', projectileType: 'DRAGON', owner: 'player', pos: { ...player.pos }, velocity: { x: Math.cos(angle) * 3, y: Math.sin(angle) * 3 }, radius: 200, color: '#10b981', hp: 999, maxHp: 999, damage: 300 * damageMult * 2.0, duration: 600 }); triggerShake(60, 60); } }
-        player.velocity = { x: 0, y: 0 }; if(player.attackAnim && player.attackAnim > 0) player.attackAnim -= timeScale;
         
         // --- PHYSICS SYSTEM CALL ---
-        PhysicsSystem.updatePlayerMovement(player, keysRef, mouseRef, cameraRef, mapRef.current, statsRef.current.currentMapType, decorationsRef.current, boatRef.current, puddlesRef.current, ripplesRef.current, timeRef.current, timeScale, projectilesRef.current, audioManager, CLASS_STATS[characterClass]);
+        PhysicsSystem.updatePlayerMovement(player, keysRef, mouseRef, cameraRef, mapRef.current, statsRef.current.currentMapType, decorationsRef.current, boatRef.current, puddlesRef.current, ripplesRef.current, timeRef.current, timeScale, projectilesRef.current, NewAudioManager, CLASS_STATS[characterClass]);
         
-        // Dash particle logic (kept here or move to particle system later)
+        // Attack Animation decay
+        if(player.attackAnim && player.attackAnim > 0) player.attackAnim -= timeScale;
+
+        // Dash particle logic
         if (player.dashTimer && player.dashTimer > 0) {
             if (Math.floor(timeRef.current) % 3 === 0) {
                  if (characterClass === CharacterClass.GUNNER) { particlesRef.current.push({ id: Math.random().toString(), type: 'player', pos: { ...player.pos }, velocity: {x:0,y:0}, radius: player.radius, color: '#fff', hp: 0, maxHp: 0, duration: 12, alpha: 0.3, facing: player.facing, attackAnim: player.attackAnim }); spawnParticle({x: player.pos.x, y: player.pos.y + 10}, '#d6d3d1', 2, 1, 3); } 
@@ -435,8 +533,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                          const dmg = statsRef.current.currentDamage * 0.5; 
                          if (!e.hitFlash) { 
                              e.hp -= dmg; e.hitFlash = 10; addFloatingText(dmg.toFixed(0), e.pos.x, e.pos.y, '#fff', 0.8); 
-                             if (characterClass === CharacterClass.SAMURAI) audioManager.playImpact();
-                             handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, audioManager);
+                             if (characterClass === CharacterClass.SAMURAI) NewAudioManager.playImpact();
+                             handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, NewAudioManager);
                          } 
                      } 
                 });
@@ -450,7 +548,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         lastEnemySpawnTimeRef.current = EnemySystem.spawnEnemy(enemiesRef.current, player, statsRef.current, lastEnemySpawnTimeRef.current, now);
 
         // --- BOSS UPDATE ---
-        BossSystem.updateBosses(enemiesRef.current, player, projectilesRef.current, particlesRef.current, statsRef.current, audioManager, addFloatingText, triggerShake);
+        BossSystem.updateBosses(enemiesRef.current, player, projectilesRef.current, particlesRef.current, statsRef.current, NewAudioManager, addFloatingText, triggerShake);
 
         // --- SWORD ORBITS ---
         const activeSwords = projectilesRef.current.filter(p => p.projectileType === 'SPIRIT_SWORD');
@@ -462,16 +560,52 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
             activeSwords.forEach((sword, i) => { (sword as any).targetOrbitAngle = swordOrbitProgressRef.current + i * angleStep; });
         }
         
-        // --- PROJECTILES LOOP (Inline for now due to complexity, can be extracted later) ---
+        // --- PROJECTILES LOOP ---
         for (let i = projectilesRef.current.length - 1; i >= 0; i--) {
              const p = projectilesRef.current[i];
              p.pos.x += p.velocity.x * timeScale; p.pos.y += p.velocity.y * timeScale;
+             
+             // --- PROP COLLISION (HOISTED) ---
+             // Check for prop collision for ALL damaging projectiles before specific type logic
+             if (p.damage && p.damage > 0 && p.owner !== 'enemy') {
+                 for (let k = propsRef.current.length - 1; k >= 0; k--) {
+                     const prop = propsRef.current[k];
+                     if (prop.propType === PropType.BARREL && prop.propActive && Math.hypot(p.pos.x - prop.pos.x, p.pos.y - prop.pos.y) < prop.radius + p.radius) {
+                         prop.propActive = false; // Exploded
+                         
+                         // Create huge explosion
+                         projectilesRef.current.push({
+                             id: Math.random().toString(), type: 'projectile', projectileType: 'EXPLOSIVE',
+                             pos: { ...prop.pos }, velocity: {x:0,y:0}, radius: 100, color: '#f97316', 
+                             hp: 1, maxHp: 1, damage: statsRef.current.currentDamage * 5.0, duration: 40
+                         });
+                         addFloatingText("BOOM!", prop.pos.x, prop.pos.y - 60, '#f97316', 2.5);
+                         spawnParticle(prop.pos, '#f97316', 30, 8);
+                         NewAudioManager.playExplosion();
+                         triggerShake(30, 20);
+                         
+                         // Remove barrel
+                         propsRef.current.splice(k, 1);
+                         
+                         // Projectile destruction logic
+                         if (!p.piercing && p.projectileType !== 'VOID_SLASH' && p.projectileType !== 'SLASH_WAVE') { 
+                             p.hp = 0; // Mark for removal 
+                             projectilesRef.current.splice(i, 1); 
+                         }
+                         break; // Hit one prop per frame per projectile max
+                     }
+                 }
+                 if (p.hp <= 0 && !p.piercing && p.projectileType !== 'EXPLOSIVE') continue; // If destroyed by prop, skip
+             }
+
              if (p.owner === 'enemy') {
                  if (p.duration) { p.duration -= timeScale; if(p.duration <= 0) { projectilesRef.current.splice(i, 1); continue; } }
                  const distToPlayer = Math.hypot(p.pos.x - player.pos.x, p.pos.y - player.pos.y);
                  if (distToPlayer < p.radius + player.radius) { player.hp -= (p.damage || 10); statsRef.current.playerHp = player.hp; triggerShake(5, 5); spawnParticle(player.pos, '#ef4444', 5, 5); projectilesRef.current.splice(i, 1); }
                  continue; 
              }
+             
+             // ... Keep all other projectile types (ELEMENTAL_STAB, SLASH_WAVE, VOID_SLASH, etc.) ...
              if (p.projectileType === 'SPIRIT_SWORD') {
                  const isSamuraiIaido = characterClass === CharacterClass.SAMURAI && player.isIaidoCharged;
                  if (!isSamuraiIaido) { p.duration! -= timeScale; if (p.duration! <= 0) { projectilesRef.current.splice(i, 1); continue; } }
@@ -515,11 +649,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                          addFloatingText(Math.floor(contactDmg).toString(), e.pos.x, e.pos.y - 20, p.color);
                          spawnParticle(e.pos, p.color, 3, 4);
                          const pushAngle = Math.atan2(e.pos.y - player.pos.y, e.pos.x - player.pos.x); e.velocity.x += Math.cos(pushAngle) * 5; e.velocity.y += Math.sin(pushAngle) * 5;
-                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, audioManager);
+                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, NewAudioManager);
                      }
                  }
                  continue;
              }
+             
              if (p.projectileType === 'ELEMENTAL_STAB') {
                  p.duration! -= timeScale; if (p.duration <= 0) { projectilesRef.current.splice(i, 1); continue; }
                  const nearby = spatialHashRef.current.query(p.pos, p.radius + 30);
@@ -533,7 +668,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                          else if (p.element === 'FIRE') { e.burnTimer = 180; addFloatingText("Burn", e.pos.x, e.pos.y - 40, '#ef4444', 1.0); } 
                          else if (p.element === 'EARTH') { e.stunTimer = 40; addFloatingText("Stun", e.pos.x, e.pos.y - 40, '#d97706', 1.0); const pushAngle = Math.atan2(e.pos.y - p.pos.y, e.pos.x - p.pos.x); e.velocity.x += Math.cos(pushAngle) * 20; e.velocity.y += Math.sin(pushAngle) * 20; }
                          e.hp -= dmg; e.hitFlash = 10; addFloatingText(Math.floor(dmg).toString(), e.pos.x, e.pos.y - 20, p.color);
-                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, audioManager);
+                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, NewAudioManager);
                          projectilesRef.current.splice(i, 1); break; 
                      }
                  }
@@ -541,26 +676,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
              }
              if (p.projectileType === 'SLASH_WAVE' || p.projectileType === 'VOID_SLASH') { 
                  p.duration! -= timeScale; 
-                 // Void slash expands
                  if (p.projectileType === 'VOID_SLASH') { p.radius *= 1.02; } 
                  else { p.radius *= Math.pow(1.02, timeScale); const friction = Math.pow(0.95, timeScale); p.velocity.x *= friction; p.velocity.y *= friction; }
-
                  const nearbyEnemies = spatialHashRef.current.query(p.pos, p.radius);
                  for (const e of nearbyEnemies) { 
                      if (e.deathTimer) continue; 
-                     
-                     // NEW LOGIC: Void Slash only hits once
-                     if (p.projectileType === 'VOID_SLASH') {
-                         if (!p.hitList) p.hitList = [];
-                         if (p.hitList.includes(e.id)) continue;
-                     }
-
-                     // Simple collision
+                     if (p.projectileType === 'VOID_SLASH') { if (!p.hitList) p.hitList = []; if (p.hitList.includes(e.id)) continue; }
                      if (Math.hypot(p.pos.x - e.pos.x, p.pos.y - e.pos.y) < p.radius + e.radius) {
                          if (p.projectileType === 'VOID_SLASH') p.hitList!.push(e.id); 
-                         
                          e.hp -= p.damage!; e.hitFlash = 5; addFloatingText(Math.floor(p.damage!).toString(), e.pos.x, e.pos.y - 20, '#aaa'); e.velocity.x += p.velocity.x * 0.5; e.velocity.y += p.velocity.y * 0.5; 
-                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, audioManager);
+                         handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, NewAudioManager);
                      } 
                 } 
                  if (p.duration <= 0) { projectilesRef.current.splice(i, 1); continue; } 
@@ -570,7 +695,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                  const nearby = spatialHashRef.current.query(p.pos, p.radius + 30);
                  let hitEnemy = null; for (const e of nearby) { if (e.deathTimer) continue; if (Math.hypot(p.pos.x - e.pos.x, p.pos.y - e.pos.y) < p.radius + e.radius) { hitEnemy = e; break; } }
                  if (hitEnemy) {
-                     triggerShake(20, 20); audioManager.playLassoImpact(); addFloatingText("电磁场!", hitEnemy.pos.x, hitEnemy.pos.y - 40, '#06b6d4', 2.0);
+                     triggerShake(20, 20); NewAudioManager.playLassoImpact(); addFloatingText("电磁场!", hitEnemy.pos.x, hitEnemy.pos.y - 40, '#06b6d4', 2.0);
                      hitEnemy.hp -= p.damage!; hitEnemy.hitFlash = 15; hitEnemy.stunTimer = 120; hitEnemy.stunType = 'ELECTRIC';
                      projectilesRef.current.push({ id: Math.random().toString(), type: 'projectile', projectileType: 'MAGNETIC_FIELD', pos: { ...hitEnemy.pos }, velocity: {x:0, y:0}, radius: 200, color: '#06b6d4', hp: 1, maxHp: 1, damage: 0.5, duration: 120, owner: 'player', teslaDetonation: p.teslaDetonation });
                      projectilesRef.current.splice(i, 1); continue;
@@ -622,7 +747,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                  if (Math.hypot(p.velocity.x, p.velocity.y) < 0.1) { for (let e of nearby) { if (e.deathTimer) continue; if (Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) < e.radius + p.radius) { impact = true; break; } } } else { for (let e of nearby) { if (e.deathTimer) continue; if (Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) < e.radius + p.radius) { impact = true; break; } } }
                  if (p.duration <= 0 || impact) { 
                      spawnParticle(p.pos, '#f97316', 30, 10); spawnParticle(p.pos, '#fff', 15, 5); 
-                     triggerShake(15, 10); audioManager.playExplosion(); 
+                     triggerShake(15, 10); NewAudioManager.playExplosion(); 
                     const blastRadius = 120; const victims = spatialHashRef.current.query(p.pos, blastRadius);
                     victims.forEach(e => { if (Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) < blastRadius) { e.hp -= p.damage!; e.hitFlash = 10; addFloatingText(p.damage!.toFixed(0), e.pos.x, e.pos.y, '#f97316', 1.5); } }); projectilesRef.current.splice(i, 1); continue; } 
              }
@@ -647,9 +772,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
                             if (p.isInferno) e.burnTimer = 120;
                             spawnParticle(e.pos, '#ffffff', 5, 4, 2); spawnParticle(e.pos, e.color || '#991b1b', 6, 3, 3);
                             addFloatingText(Math.floor(p.damage).toString(), e.pos.x, e.pos.y - 30, '#fff');
-                            if (p.projectileType === 'FUNNEL_SHOT') audioManager.playElectricImpact(); else audioManager.playImpact();
+                            if (p.projectileType === 'FUNNEL_SHOT') NewAudioManager.playElectricImpact(); else NewAudioManager.playImpact();
                             hitEnemy = true;
-                            handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, audioManager);
+                            handleWindEndures(player, e, statsRef.current, addFloatingText, particlesRef.current, NewAudioManager);
                             if (p.ricochetsLeft && p.ricochetsLeft > 0) { p.ricochetsLeft--; let closest = null; let minD = 400; for (const other of enemiesRef.current) { if (other === e || other.deathTimer) continue; const d = Math.hypot(other.pos.x - e.pos.x, other.pos.y - e.pos.y); if (d < minD) { minD = d; closest = other; } } if (closest) { const angle = Math.atan2(closest.pos.y - e.pos.y, closest.pos.x - e.pos.x); p.velocity.x = Math.cos(angle) * 15; p.velocity.y = Math.sin(angle) * 15; p.pos.x = e.pos.x; p.pos.y = e.pos.y; p.duration = 40; hitEnemy = false; } }
                             if (p.piercing) { hitEnemy = false; }
                             if (hitEnemy && p.projectileType !== 'DRAGON' && p.projectileType !== 'TORNADO' && p.projectileType !== 'VOID_SLASH') { projectilesRef.current.splice(i, 1); break; }
@@ -660,12 +785,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         }
         
         // --- LOOT SYSTEM ---
-        LootSystem.spawnItem(itemsRef.current, {x:0, y:0}); // Hack to satisfy type, logic inside handles chance 
-        LootSystem.updateItems(itemsRef.current, player, timeScale, statsRef.current, addFloatingText, audioManager, now);
+        LootSystem.spawnItem(itemsRef.current, {x:0, y:0}); 
+        LootSystem.updateItems(itemsRef.current, player, timeScale, statsRef.current, addFloatingText, NewAudioManager, now);
 
         // --- ENEMY AI LOOP ---
         EnemySystem.updateEnemies(
-            enemiesRef.current, player, timeScale, statsRef.current, projectilesRef.current, audioManager, addFloatingText,
+            enemiesRef.current, player, timeScale, statsRef.current, projectilesRef.current, NewAudioManager, addFloatingText,
             (pos) => LootSystem.spawnItem(itemsRef.current, pos),
             spawnDeathParticles,
             triggerShake,
@@ -699,7 +824,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         const visibleDecor = decorationsRef.current.filter(e => e.pos.x > minX && e.pos.x < maxX && e.pos.y > minY && e.pos.y < maxY);
         const visibleItems = itemsRef.current.filter(e => e.pos.x > minX && e.pos.x < maxX && e.pos.y > minY && e.pos.y < maxY);
         const visibleShrines = shrinesRef.current.filter(e => !e.shrineUsed && e.pos.x > minX && e.pos.x < maxX && e.pos.y > minY && e.pos.y < maxY);
-        const renderList: Entity[] = [player, ...visibleEnemies, ...visibleDecor, ...visibleItems, ...visibleShrines];
+        const visibleProps = propsRef.current.filter(e => e.propActive && e.pos.x > minX && e.pos.x < maxX && e.pos.y > minY && e.pos.y < maxY);
+        
+        const renderList: Entity[] = [player, ...visibleEnemies, ...visibleDecor, ...visibleItems, ...visibleShrines, ...visibleProps];
         if(boatRef.current) renderList.push(boatRef.current); if(portalRef.current) renderList.push(portalRef.current);
         for(let i=0; i<particlesRef.current.length; i++) { if(particlesRef.current[i].type === 'player') renderList.push(particlesRef.current[i]); }
         renderList.sort((a, b) => a.pos.y - b.pos.y); 
@@ -711,7 +838,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         for (let i = particlesRef.current.length - 1; i >= 0; i--) { 
              const p = particlesRef.current[i]; 
              if (p.type === 'player') { if (p.duration) p.duration -= timeScale; if(p.alpha) p.alpha -= 0.05 * timeScale; }
-             else if (p.particleType === 'LEAF') { if (p.leafType === 'ORBIT') { p.orbitAngle = (p.orbitAngle || 0) + (p.orbitSpeed || 0.05) * timeScale; p.pos.x = player.pos.x + Math.cos(p.orbitAngle) * (p.orbitRadius || 40); p.pos.y = player.pos.y + Math.sin(p.orbitAngle) * (p.orbitRadius || 40); } else if (p.leafType === 'SUCTION') { const dx = player.pos.x - p.pos.x; const dy = player.pos.y - p.pos.y; const dist = Math.sqrt(dx*dx + dy*dy); if (dist > 5) { p.pos.x += dx * 0.15 * timeScale; p.pos.y += dy * 0.15 * timeScale; } } } else if (p.particleType === 'DEBRIS') { p.rotation = (p.rotation || 0) + (p.rotationSpeed || 0.1) * timeScale; p.velocity.x *= 0.92; p.velocity.y *= 0.92; p.pos.x += p.velocity.x * timeScale; p.pos.y += p.velocity.y * timeScale; } else { p.pos.x += p.velocity.x * timeScale; p.pos.y += p.velocity.y * timeScale; }
+             else if (p.particleType === 'LEAF') { if (p.leafType === 'ORBIT') { p.orbitAngle = (p.orbitAngle || 0) + (p.orbitSpeed || 0.05) * timeScale; p.pos.x = player.pos.x + Math.cos(p.orbitAngle) * (p.orbitRadius || 40); p.pos.y = player.pos.y + Math.sin(p.orbitAngle) * (p.orbitRadius || 40); } else if (p.particleType === 'LEAF' && p.leafType === 'SUCTION') { const dx = player.pos.x - p.pos.x; const dy = player.pos.y - p.pos.y; const dist = Math.sqrt(dx*dx + dy*dy); if (dist > 5) { p.pos.x += dx * 0.15 * timeScale; p.pos.y += dy * 0.15 * timeScale; } } } else if (p.particleType === 'DEBRIS') { p.rotation = (p.rotation || 0) + (p.rotationSpeed || 0.1) * timeScale; p.velocity.x *= 0.92; p.velocity.y *= 0.92; p.pos.x += p.velocity.x * timeScale; p.pos.y += p.velocity.y * timeScale; } else { p.pos.x += p.velocity.x * timeScale; p.pos.y += p.velocity.y * timeScale; }
              if (p.duration) p.duration -= timeScale; if (p.duration <= 0) particlesRef.current.splice(i, 1);
         }
         const visibleParticles = particlesRef.current.filter(p => p.pos.x > minX && p.pos.x < maxX && p.pos.y > minY && p.pos.y < maxY);
@@ -750,7 +877,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
             onStatsUpdate({...statsRef.current}); 
             setPlayerAmmo(player.ammo || 0); setIsReloading(!!player.reloading); 
         }
-        animationFrameId = requestAnimationFrame(gameLoop);
     };
 
     animationFrameId = requestAnimationFrame(gameLoop);
@@ -760,6 +886,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   return (
     <div className="relative w-full h-full">
         <canvas ref={canvasRef} className="block w-full h-full bg-slate-900" />
+        
+        {/* --- MAP TRANSITION OVERLAY --- */}
+        {transition.active && (
+            <div 
+                className="absolute inset-0 bg-slate-950 z-[60] flex flex-col items-center justify-center transition-opacity duration-1000 pointer-events-auto"
+                style={{ opacity: transition.opacity }}
+            >
+                <div className="relative">
+                    <Anchor size={64} className="text-blue-400 mb-6 animate-bounce" />
+                    <div className="absolute -inset-4 bg-blue-500/20 blur-xl rounded-full animate-pulse"></div>
+                </div>
+                <h2 className="text-3xl font-bold text-white tracking-widest uppercase mb-2 drop-shadow-lg">{transition.text}</h2>
+                <div className="w-64 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-4 border border-slate-700">
+                    <div className="h-full bg-blue-500 animate-[loading_1.5s_ease-in-out_infinite]" style={{width: '50%'}}></div>
+                </div>
+            </div>
+        )}
+
         <div className="absolute bottom-32 left-6 z-50 pointer-events-auto flex flex-col items-start gap-2">
             {showSettings && (
                 <div className="bg-slate-900/95 border border-slate-600 p-4 rounded-lg backdrop-blur-md shadow-xl w-60 animate-in slide-in-from-bottom-2 fade-in">

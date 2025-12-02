@@ -43,7 +43,8 @@ export enum DecorationType {
     PEBBLE = 'PEBBLE',
     ROCK = 'ROCK',
     GRASS_TUFT = 'GRASS_TUFT',
-    BOSS_ALTAR = 'BOSS_ALTAR' // New Trigger
+    BOSS_ALTAR = 'BOSS_ALTAR', // New Trigger
+    DOCK = 'DOCK' // New: Boat Dock
 }
 
 export enum ShrineType {
@@ -52,6 +53,12 @@ export enum ShrineType {
     GAMBLE = 'GAMBLE', 
     COOLDOWN = 'COOLDOWN',
     LEGENDARY = 'LEGENDARY' // Boss Reward
+}
+
+// New: Map Props
+export enum PropType {
+    BARREL = 'BARREL', // Explodes when hit
+    CHEST = 'CHEST'    // Drops items when interacted
 }
 
 export enum BossState {
@@ -65,6 +72,22 @@ export enum BossType {
     SHOGUN = 'SHOGUN',
     CONSTRUCT = 'CONSTRUCT',
     NONE = 'NONE'
+}
+
+// NEW: Random Events
+export enum GameEventType {
+    BLOOD_MOON_RISING = 'BLOOD_MOON_RISING',
+    MONSTER_AMBUSH = 'MONSTER_AMBUSH',
+    GOLDEN_RAIN = 'GOLDEN_RAIN'
+}
+
+export interface ActiveGameEvent {
+    type: GameEventType;
+    name: string;
+    description: string;
+    timeLeft: number; // in ms
+    totalDuration: number;
+    color: string; // Hex for UI
 }
 
 // New: Five Elements
@@ -176,11 +199,12 @@ export interface GameState {
     bossName?: string;
     bossElement?: string;
     dashCooldownPct: number;
+    activeEvent?: ActiveGameEvent | null; // New field
 }
 
 export interface Entity {
   id: string;
-  type: 'player' | 'enemy' | 'projectile' | 'particle' | 'item' | 'tree' | 'boat' | 'portal' | 'shrine';
+  type: 'player' | 'enemy' | 'projectile' | 'particle' | 'item' | 'tree' | 'boat' | 'portal' | 'shrine' | 'prop';
   
   pos: Vector2;
   velocity: Vector2;
@@ -197,6 +221,11 @@ export interface Entity {
   owner?: 'player' | 'enemy';
   shrineType?: ShrineType;
   shrineUsed?: boolean;
+  
+  // Prop Specific
+  propType?: PropType;
+  propActive?: boolean;
+
   isElite?: boolean;
   eliteAffix?: 'SPEED' | 'TANK' | 'EXPLOSIVE';
   
